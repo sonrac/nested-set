@@ -408,17 +408,24 @@ trait TNestedSet
      * @param array|TNestedSet $newParent New root node
      * @param array|TNestedSet $root      Parent root element
      *
+     * @throws \Exception
+     *
      * @return \Illuminate\Database\Eloquent\Model|TNestedSet
      */
     public static function moveToArray(&$node, &$newParent, &$root = null)
     {
         if (is_object($node)) {
-            $node->moveTo($newParent);
+            return $node->moveTo($newParent);
         }
 
-        $node['_parentNode']['childNodes'] = array_udiff($node['_parentNode']['childNodes'], [$newParent], function ($arr1, $arr2) {
-            return $arr1[static::$uniqTreeFieldColumn] - $arr2[static::$uniqTreeFieldColumn];
+        if (!isset($node['_parentNode'])) {
+            throw new \Exception('It is parent node');
+        }
+
+        $node['_parentNode']['childNodes'] = array_filter($node['_parentNode']['childNodes'], function ($arr) use ($node) {
+            return $arr[static::$uniqTreeFieldColumn] != $node[static::$uniqTreeFieldColumn];
         });
+
         return static::addTo($newParent, $node, $root);
     }
 
@@ -740,8 +747,8 @@ trait TNestedSet
         if (count($removeNode['childNodes'])) {
 
             /** @var array $items */
-            $items = array_udiff($useORM ? $pNode->childNodes->getDictionary() : $pNode['childNodes'], [$removeNode], function ($first, $second) {
-                return $first[static::$uniqTreeFieldColumn] - $second[static::$uniqTreeFieldColumn];
+            $items = array_filter($useORM ? $pNode->childNodes->getDictionary() : $pNode['childNodes'], function ($first) use ($removeNode) {
+                return $first[static::$uniqTreeFieldColumn] != $removeNode[static::$uniqTreeFieldColumn];
             });
 
             if (isset($removeNode['childNodes']) && count($removeNode['childNodes'])) {
@@ -794,8 +801,8 @@ trait TNestedSet
         $type = $type == 1 ? '_updateCondition' : '_insertCondition';
         if (isset(static::$$type[(int)$useORM][$index])) {
             foreach (static::$$type[(int)$useORM][$index] as &$item) {
-                $item = array_udiff($item, [$attributes], function ($first, $second) {
-                    return $first[static::$uniqTreeFieldColumn] - $second[static::$uniqTreeFieldColumn];
+                $item = array_filter($item, function ($first) use ($attributes) {
+                    return $first[static::$uniqTreeFieldColumn] != $attributes[static::$uniqTreeFieldColumn];
                 });
 
                 if (!count($item)) {
