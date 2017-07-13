@@ -418,7 +418,7 @@ trait TNestedSet
             return $node->moveTo($newParent);
         }
 
-        if (!isset($node['_parentNode'])) {
+        if (!isset($node['_parentNode']) && ($node[static::$treeTypeColumn] == $newParent[static::$treeTypeColumn]) && $node[static::$rootColumn] == $newParent[static::$rootColumn]) {
             throw new \Exception('It is parent node');
         }
 
