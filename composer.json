@@ -1,0 +1,16 @@
+{
+    "name": "sonrac/nested-set",
+    "description": "Nested set implementation for laravel",
+    "type": "library",
+    "require": {
+        "laravel/laravel": "5.1"
+    },
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "Donii Sergii",
+            "email": "doniysa@gmail.com"
+        }
+    ],
+    "minimum-stability": "stable"
+}
