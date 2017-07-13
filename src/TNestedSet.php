@@ -744,31 +744,41 @@ trait TNestedSet
             static::addDeleteCondition($useORM ? $pNode->getAttributes() : $pNode, $useORM);
         }
 
-        if (count($removeNode['childNodes'])) {
+        $count = count($pNode['childNodes']);
+        /** @var array $items */
+        $items = array_filter($useORM ? $pNode->childNodes->getDictionary() : $pNode['childNodes'], function ($first) use ($removeNode) {
+            return $first[static::$uniqTreeFieldColumn] != $removeNode[static::$uniqTreeFieldColumn];
+        });
 
-            /** @var array $items */
-            $items = array_filter($useORM ? $pNode->childNodes->getDictionary() : $pNode['childNodes'], function ($first) use ($removeNode) {
-                return $first[static::$uniqTreeFieldColumn] != $removeNode[static::$uniqTreeFieldColumn];
-            });
+        $result = count($items) < $count;
+
+        if (count($removeNode['childNodes'])) {
 
             if (isset($removeNode['childNodes']) && count($removeNode['childNodes'])) {
                 if ($withChild) {
                     foreach ($removeNode['childNodes'] as $index => &$childNode) {
                         if (isset($childNode['childNodes']) && count($childNode['childNodes'])) {
-                            static::removeNodeArray($childNode, $removeNode, $withChild);
+                            $result = static::removeNodeArray($childNode, $removeNode, $withChild) || $result;
                         }
                     }
                 } else {
                     if (isset($removeNode['childNodes']) && count($removeNode['childNodes'])) {
                         $items = array_merge($items, $removeNode['childNodes']);
+                        $result = ($count > count($items)) || $result;
                     }
                 }
             }
         }
 
+        if ($useORM) {
+            $pNode->setRelation('childNodes', $items);
+        } else {
+            $pNode['childNodes'] = $items;
+        }
+
         static::removeFromAllCondition($useORM ? $removeNode->getAttributes() : $removeNode, $useORM);
 
-        return (isset($items)) && is_array($items) ? $count > count($items) : false;
+        return $result;
     }
 
     /**
