@@ -11,6 +11,11 @@ use Illuminate\Database\Eloquent\Collection;
  *
  * IMPORTANT!!! Adding to model boot call method bootNTH for auto update tree on ORM object changes
  *
+ * VERY IMPORTANT!!! Don't use
+ *           relation parentNode with DeepRelation & ORModel, and method \Illuminate\Eloquent\Database\Model::toArray
+ *           because this will lead to a recurring looping. All nodes will be loading in protected attribute
+ *           _parentNode Use it for loading parent node.
+ *
  * @see     TNestedSet::bootNTH()
  *
  * @property \Illuminate\Database\Eloquent\Model|TNestedSet         $root          Get tree root
@@ -131,6 +136,12 @@ trait TNestedSet
 
     /**
      * Parent node
+     * IMPORTANT!!!
+     * Don't use
+     *           relation parentNode with DeepRelation & ORModel, and method
+     *           \Illuminate\Eloquent\Database\Model::toArray because this will lead to a recurring looping. All nodes
+     *           will be loading in protected attribute
+     *           _parentNode Use it for loading parent node.
      *
      * @var TNestedSet
      */
@@ -299,6 +310,12 @@ trait TNestedSet
 
     /**
      * Get parent node
+     * IMPORTANT!!!
+     * Don't use
+     *           relation parentNode with DeepRelation & ORModel, and method
+     *           \Illuminate\Eloquent\Database\Model::toArray because this will lead to a recurring looping. All nodes
+     *           will be loading in protected attribute
+     *           _parentNode Use it for loading parent node.
      *
      * @return \Illuminate\Database\Eloquent\Relations\HasOne|\Illuminate\Database\Eloquent\Builder
      */
@@ -440,10 +457,6 @@ trait TNestedSet
      */
     public function moveTo($rootNode)
     {
-        if ($this->isRoot()) {
-            throw new \Exception('Don\'t allow move root node');
-        }
-
         $this->_parentNode->setRelation('childNodes', $this->_parentNode->childNodes ? $this->_parentNode->childNodes->diff(new Collection([$rootNode])) : []);
         return $rootNode->addChild($this);
     }
@@ -496,7 +509,6 @@ trait TNestedSet
     public static function addTo(&$pNode, $children, &$pRoot = null)
     {
         $useORM = is_object($pNode);
-        static::$_cacheInstance = static::$_cacheInstance ?? new self();
         $pNode = static::checkExistsNeeded($pNode);
         $children = static::checkExistsNeeded($children);
 
@@ -526,7 +538,7 @@ trait TNestedSet
         static::updateModelUnique($children);
         /** @var $children TNestedSet */
         $children[static::$treeTypeColumn] = $pNode[static::$treeTypeColumn];
-        $index = static::getNodeIndex($children, static::$_cacheInstance->getKeyName());
+        $index = static::getNodeIndex($children, static::getModelInstance()->getKeyName());
         if ($useORM) {
             $children->setRootElement($pRoot);
         } else {
@@ -643,16 +655,16 @@ trait TNestedSet
      */
     public function removeById(&$id, $withChild = true)
     {
-        if (!static::$_cacheInstance) {
-            static::$_cacheInstance = new static();
-        }
-        $nodeInfo = static::findNodeInTree([static::$_cacheInstance->getKeyName() => $id], $pNode);
+        $nodeInfo = static::findNodeInTree([static::getModelInstance()->getKeyName() => $id], $pNode);
 
         if (!$nodeInfo) {
             return false;
         }
 
-        return $nodeInfo['node']->removeNode();
+        /** @var TNestedSet $node */
+        $node = $nodeInfo['node'];
+
+        $node->removeNode($withChild);
     }
 
     /**
@@ -673,7 +685,10 @@ trait TNestedSet
             return false;
         }
 
-        $nodeInfo['node']->removeNode($withChild);
+        /** @var TNestedSet $node */
+        $node = $nodeInfo['node'];
+
+        $node->removeNode($withChild);
     }
 
     /**
@@ -689,10 +704,7 @@ trait TNestedSet
      */
     public static function removeByIdArray(&$pNode, &$id, $withChild = true)
     {
-        if (!static::$_cacheInstance) {
-            static::$_cacheInstance = new static;
-        }
-        return static::removeByAttributesArray($pNode, [static::$_cacheInstance->getKeyName() => $id], $withChild);
+        return static::removeByAttributesArray($pNode, [static::getModelInstance()->getKeyName() => $id], $withChild);
     }
 
     /**
@@ -737,20 +749,37 @@ trait TNestedSet
             return false;
         }
 
-        $count = count($pNode['childNodes']);
-
-        $key = static::$_cacheInstance->getKeyName();
+        $key = static::getModelInstance()->getKeyName();
         if (($useORM && $pNode->{$key}) || (!$useORM && isset($pNode[$key]) && $pNode[$key])) {
             static::addDeleteCondition($useORM ? $pNode->getAttributes() : $pNode, $useORM);
         }
 
         $count = count($pNode['childNodes']);
-        /** @var array $items */
-        $items = array_filter($useORM ? $pNode->childNodes->getDictionary() : $pNode['childNodes'], function ($first) use ($removeNode) {
-            return $first[static::$uniqTreeFieldColumn] != $removeNode[static::$uniqTreeFieldColumn];
-        });
 
-        $result = count($items) < $count;
+        $filter = function ($first) use ($removeNode) {
+            return $first[static::$uniqTreeFieldColumn] != $removeNode[static::$uniqTreeFieldColumn];
+        };
+
+        /** @var array $items */
+        if ($useORM) {
+            $pNode->childNodes = $pNode->childNodes->filter($filter);
+        } else {
+            $pNode['childNodes'] = array_filter($pNode['childNodes'], $filter);
+        }
+
+        $countItems = count($pNode['childNodes']);
+        $result = $countItems < $count;
+
+        $root = null;
+        if ($useORM) {
+            $root = $pNode->isRoot() ? $pNode : $pNode->getRootElement();
+        } else {
+            if (isset($pNode['_root'])) {
+                $root = &$pNode['_root'];
+            } else {
+                $root = $pNode;
+            }
+        }
 
         if (count($removeNode['childNodes'])) {
 
@@ -763,17 +792,40 @@ trait TNestedSet
                     }
                 } else {
                     if (isset($removeNode['childNodes']) && count($removeNode['childNodes'])) {
-                        $items = array_merge($items, $removeNode['childNodes']);
-                        $result = ($count > count($items)) || $result;
+                        /** @var TNestedSet|array $pParent */
+                        $pParent = null;
+                        if ($useORM) {
+                            $pParent = $removeNode->getParentNode();
+                            if (!$pParent) {
+                                $pParent = &$pNode;
+                            }
+                        } else if (isset($removeNode['_parentNode'])) {
+                            $pParent = &$removeNode['_parentNode'];
+                        }
+
+                        if (!$pParent) {
+                            $pParent = $pNode;
+                        }
+
+                        if (!$useORM && !isset($pParent['childNodes'])) {
+                            $pParent['childNodes'] = [];
+                        }
+
+                        foreach ($removeNode['childNodes'] as &$pChildNode) {
+                            /** @var TNestedSet|array $pChildNode */
+                            if ($useORM) {
+                                $pChildNode->setParentNode($pParent);
+                            } else {
+                                $pChildNode['_parentNode'] = &$pParent;
+                            }
+                        }
+
+                        foreach ($removeNode['childNodes'] as $index => &$pChildNode) {
+                            $root = static::moveToArray($pChildNode, $pParent, $root);
+                        }
                     }
                 }
             }
-        }
-
-        if ($useORM) {
-            $pNode->setRelation('childNodes', $items);
-        } else {
-            $pNode['childNodes'] = $items;
         }
 
         static::removeFromAllCondition($useORM ? $removeNode->getAttributes() : $removeNode, $useORM);
@@ -925,10 +977,6 @@ trait TNestedSet
         static::initBuildConditions($treeType, $useORM);
 
         $childrenIndexes = [];
-
-        if (!static::$_cacheInstance) {
-            static::$_cacheInstance = new static();
-        }
 
         $pCurrentRoot = &$pTree;
         $depth = 1;
@@ -1169,6 +1217,12 @@ trait TNestedSet
 
     /**
      * Update tree indexes
+     * IMPORTANT!!!
+     * Don't use
+     *           relation parentNode with DeepRelation & ORModel, and method
+     *           \Illuminate\Eloquent\Database\Model::toArray because this will lead to a recurring looping. All nodes
+     *           will be loading in protected attribute
+     *           _parentNode Use it for loading parent node.
      *
      * @throws \Exception
      *
@@ -1195,19 +1249,25 @@ trait TNestedSet
     /**
      * Build tree
      *
-     * @param null|string $treeType Search tree type
-     * @param bool        $useORM   Use ORM for build tree or build array tree
+     * @param null|string|array $treeType Search tree type
+     * @param bool              $useORM   Use ORM for build tree or build array tree
      *
      * @return \Illuminate\Database\Eloquent\Model[]|array|Collection
      */
     public static function buildTree($treeType = null, $useORM = true)
     {
-        $index = static::getCacheIndex($treeType, $useORM);
+        if (is_string($treeType) || empty($treeType)) {
+            $index = static::getCacheIndex($treeType, $useORM);
 
-        if ($cached = static::getCachedTree($treeType, $useORM)) {
-            return $cached;
+            if ($cached = static::getCachedTree($treeType, $useORM)) {
+                return $cached;
+            }
+            $nodes = static::getAllTree($treeType);
+        } else if (is_array($treeType)) {
+            $nodes = $treeType;
+            $index = static::getCacheIndex($treeType[0][static::$treeTypeColumn], $useORM);
+            static::addToCache($index, $nodes);
         }
-        $nodes = static::getAllTree($treeType);
 
         $class = static::class;
         if ($useORM && is_array($nodes) && count($nodes) && !(current($nodes) instanceof $class)) {
@@ -1227,25 +1287,34 @@ trait TNestedSet
 
         foreach ($nodes as &$pNode) {
             $pNode = $pNode instanceof \stdClass ? (array)$pNode : $pNode;
-            $pk = $pNode[static::$_cacheInstance->getKeyName()];
-            $parent = $pNode[static::$uniqTreeFieldColumn];
+            $pk = $pNode[static::$uniqTreeFieldColumn];
+            $parent = isset($pNode[static::$parentColumn]) ? $pNode[static::$parentColumn] : null;
 
-            $pNode['childNodes'] = $useORM ? new Collection() : [];
+            if ($useORM) {
+                $pNode->setRelation('childNodes', new Collection());
+            } else {
+                $pNode['childNodes'] = [];
+            }
 
             if (isset($rootNode[$pNode[static::$treeTypeColumn]])) { // Append root nodes
                 if ($useORM) {
                     $pNode->setRootElement($rootNode[$pNode[static::$treeTypeColumn]]);
                 } else {
-                    $pNode['_root'] = $rootNode[$pNode[static::$treeTypeColumn]];
+                    $pNode['_root'] = &$rootNode[$pNode[static::$treeTypeColumn]];
                 }
             }
 
-            if ($parent) { // Append child nodes
+            if (!is_null($parent)) { // Append child nodes
                 $_node = static::prepareNode($pNode, $useORM, $rootNode[$pNode[static::$treeTypeColumn]]);
+                if ($useORM) {
+                    $_node->setParentNode($pAllParents[$parent]);
+                } else {
+                    $_node['_parentNode'] = &$pAllParents[$parent];
+                }
                 $pAllParents[$parent]['childNodes'][$pk] = $_node;
                 $pAllParents[$pk] = &$pAllParents[$parent]['childNodes'][$pk];
             } else { // Append nodes
-                $allItems[$pk] = static::prepareNode($pNode, $useORM, null);
+                $allItems[$pk] = static::prepareNode($pNode, $useORM);
                 $pAllParents[$pk] = &$allItems[$pk];
                 $rootNode[$pNode[static::$treeTypeColumn]] = &$allItems[$pk];
             }
@@ -1275,6 +1344,7 @@ trait TNestedSet
      */
     /**
      * Get parent node
+     * IMPORTANT!!!
      * Don't use relation parentNode with DeepRelation & ORModel, and method
      * \Illuminate\Eloquent\Database\Model::toArray because this will lead to a recurring looping. All nodes will be
      * loading in protected attribute _parentNode Use it for loading parent node.
@@ -1297,7 +1367,7 @@ trait TNestedSet
     public function setParentNode($node)
     {
         $this->_parentNode = $node;
-        $this->{static::$parentColumn} = $node->{static::$uniqTreeFieldColumn};
+        $this->{static::$parentColumn} = $node ? $node->{static::$uniqTreeFieldColumn} : null;
     }
 
     /**
@@ -1423,8 +1493,7 @@ trait TNestedSet
      */
     protected static function getNodeIndex($children, $column = null)
     {
-        static::$_cacheInstance = static::$_cacheInstance ?? new static();
-        $column = $column || static::$_cacheInstance->getKeyName();
+        $column = $column || static::getModelInstance()->getKeyName();
 
         if (is_array($children)) {
             return isset($children[$column]) ? $children[$column] : null;
@@ -1488,11 +1557,7 @@ trait TNestedSet
      */
     protected static function getAllTree($treeType = null)
     {
-        if (!static::$_cacheInstance) {
-            static::$_cacheInstance = (new static());
-        }
-
-        $inst = static::$_cacheInstance;
+        $inst = static::getModelInstance();
         $query = \DB::query()
             ->from($inst->getTable());
 
@@ -1590,12 +1655,8 @@ trait TNestedSet
             return null;
         }
 
-        if (!static::$_cacheInstance) {
-            static::$_cacheInstance = (new static());
-        }
-
         if (is_array($attributes)) {
-            $pk = isset($attributes[$key = static::$_cacheInstance->getKeyName()]) ? $attributes[$key] : null;
+            $pk = isset($attributes[$key = static::getModelInstance()->getKeyName()]) ? $attributes[$key] : null;
         } else {
             $pk = $attributes->{$attributes->getKeyName()};
         }
@@ -1603,6 +1664,16 @@ trait TNestedSet
         $index = $attributes[static::$treeTypeColumn];
 
         return [$index, $pk];
+    }
+
+    /**
+     * Get model instance
+     *
+     * @return TNestedSet|\Illuminate\Database\Eloquent\Model|static
+     */
+    protected static function getModelInstance()
+    {
+        return static::$_cacheInstance ?: static::$_cacheInstance = new static();
     }
     /**
      *
@@ -1725,21 +1796,27 @@ trait TNestedSet
     /**
      * Prepare node
      *
-     * @param array|TNestedSet $node     Next node
-     * @param bool             $useORM   Use ORM for build tree or build array tree
-     * @param null|TNestedSet  $rootNode Root node
+     * @param array|TNestedSet $node      Next node
+     * @param bool             $useORM    Use ORM for build tree or build array tree
+     * @param null|TNestedSet  $pRootNode Root node
      *
      * @return TNestedSet|array
      */
-    protected static function prepareNode($node, $useORM, $rootNode = null)
+    protected static function prepareNode($node, $useORM, &$pRootNode = null)
     {
         if ($useORM && is_array($node)) {
             $model = new static();
             $model->fill($node);
             $model->setRelation('childNodes', new Collection());
-            $rootNode = $rootNode ?? $model;
-            $model->setRootElement($rootNode);
+            $pRootNode = $rootNode ?? $model;
+            $model->setRootElement($pRootNode);
             return $model;
+        } else {
+            if ($pRootNode) {
+                $node['_root'] = $pRootNode;
+            } else {
+                $node['_root'] = $node;
+            }
         }
 
         return $node;
@@ -1766,7 +1843,7 @@ trait TNestedSet
      */
     protected static function keyUpdateStatement($enable)
     {
-        \DB::statement('ALTER TABLE ' . static::$_cacheInstance->getTable() . ' ' . ($enable ? 'ENABLE' : 'DISABLE') . ' KEYS');
+        \DB::statement('ALTER TABLE ' . static::getModelInstance()->getTable() . ' ' . ($enable ? 'ENABLE' : 'DISABLE') . ' KEYS');
         if ($enable) {
             \DB::statement('COMMIT');
         }
@@ -1872,7 +1949,7 @@ trait TNestedSet
      * Add delete condition
      *
      * @param array $attributes Tree index
-     * @param bool  $useORM
+     * @param bool  $useORM     Use ORM or use array (if false)
      */
     public static function addDeleteCondition($attributes, $useORM = true)
     {
@@ -1966,7 +2043,7 @@ trait TNestedSet
         if (count($deletes)) {
             foreach ($deletes as $delete) {
                 try {
-                    $count += \DB::table(static::$_cacheInstance->getTable())->whereIn(static::$_cacheInstance->getKeyName(), $delete)->delete();
+                    $count += \DB::table(static::getModelInstance()->getTable())->whereIn(static::getModelInstance()->getKeyName(), $delete)->delete();
                 } catch (\Exception $exception) { // I need enable key updates
                     \DB::rollBack();
                     static::keyUpdateStatement(true);
@@ -1994,7 +2071,7 @@ trait TNestedSet
              * @see https://stackoverflow.com/questions/12754470/mysql-update-case-when-then-else
              */
             $nthAttributes = static::getNTHColumnsList();
-            $skip = array_merge(static::$_skipTableAttributes ?? [], [static::$_cacheInstance->getKeyName()]);
+            $skip = array_merge(static::$_skipTableAttributes ?? [], [static::getModelInstance()->getKeyName()]);
             foreach ($updates as $updatePart) {
                 $updateSql = [];
                 foreach ($updatePart as $id => $attributes) {
@@ -2011,15 +2088,15 @@ trait TNestedSet
                         if (empty($quote) && isset($nthAttributes[$name])) {
                             throw new \Exception("Column {$name} could not empty");
                         }
-                        $statement = " WHEN `" . static::$_cacheInstance->getKeyName() . "` = {$id} THEN " . $quote;
+                        $statement = " WHEN `" . static::getModelInstance()->getKeyName() . "` = {$id} THEN " . $quote;
                         $updateSql[$name] .= " " . $statement;
                     }
 
                     if (empty($updateSql)) {
                         continue;
                     }
-                    $query = 'UPDATE ' . static::$_cacheInstance->getTable() . " SET " . implode(" END, ", $updateSql) .
-                        " END WHERE " . static::$_cacheInstance->getKeyName() . " in (" . implode(',', array_keys($updatePart)) . ")";
+                    $query = 'UPDATE ' . static::getModelInstance()->getTable() . " SET " . implode(" END, ", $updateSql) .
+                        " END WHERE " . static::getModelInstance()->getKeyName() . " in (" . implode(',', array_keys($updatePart)) . ")";
 
                     /** @var PDOStatement $statement */
                     /**
@@ -2042,7 +2119,7 @@ trait TNestedSet
         if (count($inserts)) {
             foreach ($inserts as $treeType => $insert) {
                 try {
-                    \DB::table(static::$_cacheInstance->getTable())
+                    \DB::table(static::getModelInstance()->getTable())
                         ->insert($insert);
                 } catch (\Exception $exception) { // I need enable key updates
                     \DB::rollBack();
@@ -2091,8 +2168,11 @@ trait TNestedSet
         if (empty($data)) {
             throw new \Exception('Empty data does not possible to set in cached tree');
         }
+
+        static::$_cachedTrees[$index] = $data;
+
         if ($return) {
-            return static::$_cachedTrees[$index] = $data;
+            return static::$_cachedTrees[$index];
         }
     }
 
@@ -2155,5 +2235,4 @@ trait TNestedSet
      *
      *
      */
-
 }

@@ -3,7 +3,7 @@
 namespace Tests\Unit\Nested\models;
 
 use App\Common\Models\ORModel;
-use App\Common\Models\ProductsProperties\ProductsPropertiesUnits;
+use App\Models\ProductsProperties\ProductsPropertiesUnits;
 use App\Common\Models\TNestedSet;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Collection;
@@ -219,7 +219,7 @@ abstract class BaseNestedTest extends TestCase
         } else {
             $this->assertInternalType('array', $collection[$id]);
         }
-        $this->assertEquals($id, $collection[$id]['id']);
+        $this->assertEquals($id, $collection[$id]['unique_id']);
         $this->assertCount($countChildrens, $collection[$id]['childNodes']);
         if ($useORM) {
             if (!is_null($collection[$id]['parent_id']) && $collection[$id]['parent_id']) {
@@ -276,9 +276,6 @@ abstract class BaseNestedTest extends TestCase
         $this->assertEquals($left, $model['left']);
         $this->assertEquals($right, $model['right']);
         $this->assertEquals($depth, $model['depth']);
-        if ($useORM || (is_array($model) && isset($model['id']))) {
-            $this->assertNotEquals($model['id'], $model['unique_id']);
-        }
         $this->assertEquals($root, $useORM ? $model->getRootElement() : (isset($model['_root']) ? $model['_root'] : null));
     }
 

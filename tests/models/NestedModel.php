@@ -1,7 +1,7 @@
 <?php
 namespace Tests\Unit\Nested\models;
 
-use App\Common\Models\ProductsProperties\ProductsPropertiesUnits;
+use App\Models\ProductsProperties\ProductsPropertiesUnits;
 use App\Common\Models\TNestedSet;
 
 /**

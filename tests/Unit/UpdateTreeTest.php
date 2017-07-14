@@ -2,8 +2,8 @@
 
 namespace Tests\Unit\Nested;
 
-use App\Common\Models\ProductsProperties\Properties;
-use App\Common\Models\ProductsProperties\Units;
+use App\Models\ProductsProperties\Properties;
+use App\Models\ProductsProperties\Units;
 use Tests\Unit\Nested\models\BaseNestedTest;
 use Tests\Unit\Nested\models\NestedModel;
 
@@ -72,7 +72,7 @@ class UpdateTreeTest extends BaseNestedTest
         $_model = [
             'unit_id' => rand(1, Units::UNIT_KG),
             'property_id' => Properties::PROP_WEIGHT,
-            'product_id' => 1,
+            'product_id' => rand(2, 1000000),
             'value' => rand(1, 500)
         ];
 
@@ -114,13 +114,13 @@ class UpdateTreeTest extends BaseNestedTest
         $model['unit_id'] = Units::UNIT_KG;
         $model['value'] = 20;
         $model['property_id'] = Properties::PROP_WEIGHT;
-        $model['product_id'] = 1;
+        $model['product_id'] = rand(2, 100000);
 
         for($i = 0; $i < $childrenCount; $i++) {
             $_model = [
                 'unit_id' => rand(1, Units::UNIT_KG),
                 'property_id' => Properties::PROP_WEIGHT,
-                'product_id' => 1,
+                'product_id' => rand(2, 100000),
                 'value' => rand(1, 500)
             ];
             if ($useORM) {
